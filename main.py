@@ -1,39 +1,58 @@
 # main.py
 #
-# 调用流程：
-#   1. FastAPI 暴露 GET /gen_image?prompt=xxx
-#   2. 读取环境变量中的 AK/SK（不写死在代码里）
-#   3. 使用 volcengine 官方 SDK 自动签名
-#   4. 指定 endpoint = "visual.volcengineapi.com"
-#   5. 返回 {"image_url": "..."} 给调用方
+# ① FastAPI 暴露 GET /gen_image?prompt=xxx
+# ② 手写 HMAC-SHA256 签名 —— 已补 Canonical QueryString
+# ③ Host = visual.volcengineapi.com   Region = cn-beijing
+# ④ 返回 {"image_url": "..."} 给调用方
 #
-import os, json
-from fastapi import FastAPI, Query
-from volcengine.CV.CV import CVService
+import os, json, time, hmac, hashlib, httpx
+from fastapi import FastAPI, HTTPException, Query
 import uvicorn
 
-# 1) 从环境变量里读取 AK、SK
-#    — 你在 Render 的 Environment 页面已经填过，不要写死到代码里
-AK = os.getenv("VOLC_ACCESS_KEY_ID")
-SK = os.getenv("VOLC_SECRET_ACCESS_KEY")
+ACCESS_KEY = os.getenv("VOLC_ACCESS_KEY_ID")
+SECRET_KEY = os.getenv("VOLC_SECRET_ACCESS_KEY")
 
-# 2) 初始化官方 SDK：指定 region = "cn-beijing"
-svc = CVService(region="cn-beijing")
-svc.set_ak(AK)           # 把 AK 注入 SDK
-svc.set_sk(SK)           # 把 SK 注入 SDK
-# 3) 关键一步！告诉 SDK 使用视觉服务专属域名
-svc.set_endpoint("visual.volcengineapi.com")
+REGION   = "cn-beijing"
+HOST     = "visual.volcengineapi.com"
+SERVICE  = "cv"
+ACTION   = "JimengHighAESGeneralV21L"
+VERSION  = "2024-06-06"
 
-app = FastAPI()
+# ---------- 签名工具（已补 query） ----------------------------
+def sign(body: str, timestamp: str) -> tuple[str, str]:
+    signed_headers = "host;x-content-sha256;x-date"
+    content_sha256 = hashlib.sha256(body.encode()).hexdigest()
 
-@app.get("/gen_image")
-async def gen_image(prompt: str = Query(..., description="提示词")):
-    """
-    调用 Jimeng 高质量生图 V2.1L
-    文档：https://www.volcengine.com/docs/1062/1313205
-    """
-    body = {
-        "req_key": "jimeng_high_aes_general_v21l",
+    # ⚠️ Canonical QueryString 必须包含 Action&Version 且按字典序
+    canonical_query = f"Action={ACTION}&Version={VERSION}"
+
+    canonical_request = (
+        f"POST\n/\n{canonical_query}\n"
+        f"host:{HOST}\n"
+        f"x-content-sha256:{content_sha256}\n"
+        f"x-date:{timestamp}\n\n"
+        f"{signed_headers}\n"
+        f"{content_sha256}"
+    )
+
+    date = timestamp[:8]
+    k_date    = hmac.new(("HMAC-SHA256" + SECRET_KEY).encode(), date.encode(),   hashlib.sha256).digest()
+    k_region  = hmac.new(k_date,    REGION.encode(),  hashlib.sha256).digest()
+    k_service = hmac.new(k_region,  SERVICE.encode(), hashlib.sha256).digest()
+    k_signing = hmac.new(k_service, b"request",       hashlib.sha256).digest()
+
+    signature = hmac.new(k_signing, canonical_request.encode(), hashlib.sha256).hexdigest()
+    credential_scope = f"{date}/{REGION}/{SERVICE}/request"
+    authorization = (
+        f"HMAC-SHA256 Credential={ACCESS_KEY}/{credential_scope}, "
+        f"SignedHeaders={signed_headers}, Signature={signature}"
+    )
+    return authorization, content_sha256
+# -------------------------------------------------------------
+
+async def call_volc(prompt: str) -> str:
+    body_dict = {
+        "req_key": ACTION.lower(),
         "text": prompt,
         "n": 1,
         "style": 0,
@@ -41,17 +60,28 @@ async def gen_image(prompt: str = Query(..., description="提示词")):
         "height": 1024,
         "req_type": "text2img"
     }
-    # SDK 帮我们负责加 Action/Version 并自动签名
-    resp = svc.common_handler(
-        service="cv",
-        version="2024-06-06",
-        action="JimengHighAESGeneralV21L",
-        params={},            # query string (这里留空)
-        body=body             # JSON body
-    )
-    data = json.loads(resp)
-    return {"image_url": data["Result"]["image_urls"][0]}
+    body = json.dumps(body_dict, separators=(",", ":"))
+    ts   = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    auth, sha = sign(body, ts)
 
-# 本地调试用；Render 部署会读取 Procfile 或 Start Command
-if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    headers = {
+        "Content-Type":     "application/json",
+        "Host":             HOST,
+        "X-Content-Sha256": sha,
+        "X-Date":           ts,
+        "Authorization":    auth
+    }
+    url = f"https://{HOST}/?Action={ACTION}&Version={VERSION}"
+    async with httpx.AsyncClient(timeout=30) as c:
+        r = await c.post(url, data=body, headers=headers)
+    if r.status_code != 200:
+        raise HTTPException(r.status_code, r.text)
+    data = r.json()
+    return data["body"]["Result"]["image_urls"][0]
+
+# ---------------- FastAPI ------------------------------
+app = FastAPI()
+
+@app.get("/gen_image")
+async def gen_image(prompt: str = Query(..., description="随便写提示词")):
+    img =
