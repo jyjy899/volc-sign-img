@@ -1,7 +1,7 @@
 import os
 from fastapi import FastAPI, HTTPException, Query
 import uvicorn
-from volcengine.CV import CVService  # 官方 SDK
+from volcengine.CV.CVService import CVService
 
 REGION = "cn-north-1"
 
