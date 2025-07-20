@@ -37,6 +37,7 @@ def sign(body: str, timestamp: str) -> tuple[str, str]:
         f"HMAC-SHA256 Credential={ACCESS_KEY}/{credential_scope}, "
         f"SignedHeaders={signed_headers}, Signature={signature}"
     )
+    print("###CANONICAL###\\n"+canonical_request+"\\n###END###")
     return authorization, content_sha256
 
 async def call_volc(prompt: str) -> str:
