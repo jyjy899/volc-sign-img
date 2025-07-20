@@ -1,10 +1,3 @@
-# main.py
-#
-# ① FastAPI 暴露 GET /gen_image?prompt=xxx
-# ② 手写 HMAC-SHA256 签名 —— 已补 Canonical QueryString
-# ③ Host = visual.volcengineapi.com   Region = cn-beijing
-# ④ 返回 {"image_url": "..."} 给调用方
-#
 import os, json, time, hmac, hashlib, httpx
 from fastapi import FastAPI, HTTPException, Query
 import uvicorn
@@ -18,12 +11,9 @@ SERVICE  = "cv"
 ACTION   = "JimengHighAESGeneralV21L"
 VERSION  = "2024-06-06"
 
-# ---------- 签名工具（已补 query） ----------------------------
 def sign(body: str, timestamp: str) -> tuple[str, str]:
     signed_headers = "host;x-content-sha256;x-date"
     content_sha256 = hashlib.sha256(body.encode()).hexdigest()
-
-    # ⚠️ Canonical QueryString 必须包含 Action&Version 且按字典序
     canonical_query = f"Action={ACTION}&Version={VERSION}"
 
     canonical_request = (
@@ -48,7 +38,6 @@ def sign(body: str, timestamp: str) -> tuple[str, str]:
         f"SignedHeaders={signed_headers}, Signature={signature}"
     )
     return authorization, content_sha256
-# -------------------------------------------------------------
 
 async def call_volc(prompt: str) -> str:
     body_dict = {
@@ -79,9 +68,12 @@ async def call_volc(prompt: str) -> str:
     data = r.json()
     return data["body"]["Result"]["image_urls"][0]
 
-# ---------------- FastAPI ------------------------------
 app = FastAPI()
 
 @app.get("/gen_image")
-async def gen_image(prompt: str = Query(..., description="随便写提示词")):
-    img =
+async def gen_image(prompt: str = Query(..., description="提示词")):
+    img = await call_volc(prompt)
+    return {"image_url": img}
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8000)
