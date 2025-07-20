@@ -1,4 +1,4 @@
 fastapi==0.111.0
 uvicorn==0.29.0
 httpx==0.27.0
-volcengine>=1.0.110       # ← 建议直接用 1.0.110+（含 CVService）
+volcengine-python-sdk>=1.0.44   # ← 用这个包，版本 1.0.44+ 均可
