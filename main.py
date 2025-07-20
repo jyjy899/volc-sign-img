@@ -5,7 +5,7 @@ import uvicorn
 ACCESS_KEY = os.getenv("VOLC_ACCESS_KEY_ID")
 SECRET_KEY = os.getenv("VOLC_SECRET_ACCESS_KEY")
 
-REGION   = "cn-beijing"
+REGION   = "cn-north-1"
 HOST     = "visual.volcengineapi.com"
 SERVICE  = "cv"
 ACTION   = "JimengHighAESGeneralV21L"
